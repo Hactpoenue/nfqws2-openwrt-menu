@@ -1,16 +1,16 @@
 #!/bin/sh
 
-# =============================================================================
-# NFQWS2 OpenWrt Menu
-# One-line installer
-# =============================================================================
-
 set -e
 
 REPO="https://raw.githubusercontent.com/Hactpoenue/nfqws2-openwrt-menu/main"
 
 INSTALL_DIR="/usr/lib/nfqws2-openwrt-menu"
-BIN="/usr/bin/nfqws-menu"
+
+MENU_URL="$REPO/nfqws-menu.sh"
+DNS_URL="$REPO/menu-dns.sh"
+
+MENU_BIN="/usr/bin/nfqws-menu"
+DNS_SCRIPT="$INSTALL_DIR/menu-dns.sh"
 
 echo
 echo "=============================================="
@@ -19,7 +19,7 @@ echo "=============================================="
 echo
 
 if [ "$(id -u)" != "0" ]; then
-    echo "ERROR: installer must be run as root."
+    echo "ERROR: запускать нужно от root."
     exit 1
 fi
 
@@ -70,66 +70,70 @@ mkdir -p "$INSTALL_DIR"
 mkdir -p /etc/nfqws2
 
 echo
-echo "[3/4] Загрузка меню..."
+echo "[3/4] Загрузка файлов..."
 
-TMP="/tmp/nfqws2-menu-install"
+TMP="/tmp/nfqws2-install"
 
 rm -rf "$TMP"
 mkdir -p "$TMP"
 
-download \
-    "$REPO/nfqws-menu.sh" \
-    "$TMP/nfqws-menu.sh"
+echo "  → nfqws-menu.sh"
 
 download \
-    "$REPO/usr/lib/nfqws2-openwrt-menu/menu-dns.sh" \
+    "$MENU_URL" \
+    "$TMP/nfqws-menu.sh"
+
+echo "  → menu-dns.sh"
+
+download \
+    "$DNS_URL" \
     "$TMP/menu-dns.sh"
 
 if [ ! -s "$TMP/nfqws-menu.sh" ]; then
-    echo "ERROR: nfqws-menu.sh не загружен."
+    echo
+    echo "ERROR: nfqws-menu.sh не найден:"
+    echo "$MENU_URL"
     rm -rf "$TMP"
     exit 1
 fi
 
 if [ ! -s "$TMP/menu-dns.sh" ]; then
-    echo "ERROR: menu-dns.sh не загружен."
+    echo
+    echo "ERROR: menu-dns.sh не найден:"
+    echo "$DNS_URL"
     rm -rf "$TMP"
     exit 1
 fi
 
+echo
+echo "[4/4] Установка файлов..."
+
 chmod 0755 "$TMP/nfqws-menu.sh"
 chmod 0755 "$TMP/menu-dns.sh"
 
-cp -f "$TMP/nfqws-menu.sh" "$BIN"
-cp -f "$TMP/menu-dns.sh" "$INSTALL_DIR/menu-dns.sh"
+cp -f "$TMP/nfqws-menu.sh" "$MENU_BIN"
+cp -f "$TMP/menu-dns.sh" "$DNS_SCRIPT"
 
-chmod 0755 "$BIN"
-chmod 0755 "$INSTALL_DIR/menu-dns.sh"
+chmod 0755 "$MENU_BIN"
+chmod 0755 "$DNS_SCRIPT"
 
 rm -rf "$TMP"
 
 echo
-echo "[4/4] Установка завершена."
-
-echo
 echo "=============================================="
-echo "              ГОТОВО"
+echo "          УСТАНОВКА ЗАВЕРШЕНА"
 echo "=============================================="
 echo
 
-echo "Меню установлено:"
+echo "Установлено:"
 echo
-echo "  $BIN"
+echo "  $MENU_BIN"
+echo "  $DNS_SCRIPT"
 echo
 
 echo "Запуск:"
 echo
 echo "  nfqws-menu"
-echo
-
-echo "Репозиторий:"
-echo
-echo "  $REPO"
 echo
 
 echo "=============================================="
