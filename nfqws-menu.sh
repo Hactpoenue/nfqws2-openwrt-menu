@@ -21,10 +21,24 @@ NFQWS2_DIR="/etc/nfqws2"
 NFQWS2_CONFIG="$NFQWS2_DIR/nfqws2.conf"
 NFQWS2_BACKUP="$NFQWS2_DIR/backup"
 
-BLOBS_DIR="$NFQWS2_DIR/blobs"
-LISTS_DIR="$NFQWS2_DIR/lists"
+# ============================================================================
+# ЛОКАЛЬНАЯ СТРУКТУРА
+#
+# /etc/nfqws2/strategies/
+# ├── nfqws2/
+# ├── blobs/
+# └── lists/
+# ============================================================================
 
-LOCAL_STRATEGIES="/usr/share/nfqws2-openwrt-menu/strategies"
+STRATEGIES_DIR="$NFQWS2_DIR/strategies"
+
+LOCAL_STRATEGIES="$STRATEGIES_DIR/nfqws2"
+LOCAL_BLOBS="$STRATEGIES_DIR/blobs"
+LOCAL_LISTS="$STRATEGIES_DIR/lists"
+
+# Совместимые имена
+BLOBS_DIR="$LOCAL_BLOBS"
+LISTS_DIR="$LOCAL_LISTS"
 
 OFFICIAL_REPO="https://nfqws.github.io/nfqws2-keenetic/openwrt/packages.adb"
 OFFICIAL_KEY="https://nfqws.github.io/nfqws2-keenetic/openwrt/nfqws2-keenetic.pem"
@@ -145,9 +159,11 @@ ensure_dirs()
 {
     mkdir -p "$NFQWS2_DIR"
     mkdir -p "$NFQWS2_BACKUP"
-    mkdir -p "$BLOBS_DIR"
-    mkdir -p "$LISTS_DIR"
+
+    mkdir -p "$STRATEGIES_DIR"
     mkdir -p "$LOCAL_STRATEGIES"
+    mkdir -p "$LOCAL_BLOBS"
+    mkdir -p "$LOCAL_LISTS"
 }
 
 download()
@@ -325,6 +341,7 @@ install_nfqws2()
 
     echo
     info "Обновление списка пакетов..."
+
     apk update || {
         error "apk update завершился ошибкой."
         pause
@@ -574,8 +591,6 @@ get_current_strategy()
         return
     fi
 
-    # Старые/вручную установленные конфиги.
-    # Сравниваем содержимое после нормализации путей.
     for f in "$LOCAL_STRATEGIES"/*.conf; do
         [ -f "$f" ] || continue
 
@@ -594,16 +609,6 @@ prepare_strategy()
 {
     local src="$1"
     local tmp="$2"
-
-    # Адаптация путей Entware/Keenetic -> OpenWrt.
-    #
-    # Стратегии оригинала используют:
-    # /opt/etc/nfqws2/...
-    #
-    # На OpenWrt:
-    # /etc/nfqws2/...
-    #
-    # Также /opt/var -> /var.
 
     sed \
         -e 's#/opt/etc/nfqws2#/etc/nfqws2#g' \
@@ -693,86 +698,88 @@ copy_strategy_dependencies()
     done
 }
 
+# -----------------------------------------------------------------------------
+# Синхронизация GitHub
+# -----------------------------------------------------------------------------
+
 download_local_strategies()
 {
     ensure_dirs
 
-    local base
-    local url
+    local section
+    local api
     local dest
+    local urls
+    local url
+    local name
 
-    for base in \
-        "$STRATEGIES_URL/nfqws2" \
-        "$STRATEGIES_URL/blobs" \
-        "$STRATEGIES_URL/lists"
-    do
-        case "$base" in
-            */nfqws2)
+    for section in nfqws2 blobs lists; do
+
+        case "$section" in
+            nfqws2)
                 dest="$LOCAL_STRATEGIES"
+                api="https://api.github.com/repos/Hactpoenue/nfqws2-openwrt-menu/contents/strategies/nfqws2"
                 ;;
-            */blobs)
+
+            blobs)
                 dest="$LOCAL_BLOBS"
+                api="https://api.github.com/repos/Hactpoenue/nfqws2-openwrt-menu/contents/strategies/blobs"
                 ;;
-            */lists)
+
+            lists)
                 dest="$LOCAL_LISTS"
+                api="https://api.github.com/repos/Hactpoenue/nfqws2-openwrt-menu/contents/strategies/lists"
                 ;;
         esac
 
         mkdir -p "$dest"
 
-        info "Синхронизация: $base"
-
-        # Получаем список файлов через GitHub API.
-        url="${base#"$GITHUB_REPO"}"
-
-        # Для этой операции используем GitHub API.
-        case "$base" in
-            */nfqws2)
-                api="https://api.github.com/repos/Hactpoenue/nfqws2-openwrt-menu/contents/strategies/nfqws2"
-                ;;
-            */blobs)
-                api="https://api.github.com/repos/Hactpoenue/nfqws2-openwrt-menu/contents/strategies/blobs"
-                ;;
-            */lists)
-                api="https://api.github.com/repos/Hactpoenue/nfqws2-openwrt-menu/contents/strategies/lists"
-                ;;
-        esac
-
-        if ! have_cmd curl && ! have_cmd wget; then
-            warn "Нет curl/wget."
-            continue
-        fi
+        info "Синхронизация: $STRATEGIES_URL/$section"
 
         if have_cmd curl; then
-            filelist="$(
+            urls="$(
                 curl -fsSL "$api" 2>/dev/null |
                 sed -n 's/.*"download_url": *"\([^"]*\)".*/\1/p'
             )"
-        else
-            filelist="$(
+        elif have_cmd wget; then
+            urls="$(
                 wget -qO- "$api" 2>/dev/null |
                 sed -n 's/.*"download_url": *"\([^"]*\)".*/\1/p'
             )"
+        else
+            error "Не найден curl или wget."
+            return 1
         fi
 
-        for url in $filelist; do
+        if [ -z "$urls" ]; then
+            warn "Файлы не найдены или GitHub API недоступен:"
+            echo "$api"
+            continue
+        fi
+
+        for url in $urls; do
             [ -n "$url" ] || continue
 
-            base="$(basename "$url")"
+            name="$(basename "$url")"
 
-            case "$dest" in
-                "$LOCAL_STRATEGIES")
-                    case "$base" in
-                        *.conf)
-                            ;;
-                        *)
-                            continue
-                            ;;
-                    esac
-                    ;;
-            esac
+            # В strategies/nfqws2 принимаем только конфиги.
+            if [ "$section" = "nfqws2" ]; then
+                case "$name" in
+                    *.conf)
+                        ;;
+                    *)
+                        continue
+                        ;;
+                esac
+            fi
 
-            download "$url" "$dest/$base" >/dev/null 2>&1 || true
+            info "  → $name"
+
+            if download "$url" "$dest/$name"; then
+                ok "$name"
+            else
+                warn "Не удалось скачать $name"
+            fi
         done
     done
 
@@ -785,7 +792,7 @@ list_strategy_files()
         -maxdepth 1 \
         -type f \
         -name '*.conf' \
-        -printf '%f\n' 2>/dev/null |
+        -exec basename {} \; 2>/dev/null |
         sort -V
 }
 
@@ -854,20 +861,17 @@ apply_strategy()
             error "Не удалось обновить/восстановить пакет."
             return 1
         fi
-
     else
         tmp="/tmp/nfqws2-strategy.$$.conf"
 
         prepare_strategy "$source" "$tmp"
 
-        # Добавляем служебную метку.
         {
             echo "# NFQWS2_MENU_STRATEGY=$selected"
             cat "$tmp"
         } > "${tmp}.new"
 
         mv "${tmp}.new" "$tmp"
-
         mv "$tmp" "$NFQWS2_CONFIG"
 
         ok "Стратегия применена: $selected"
@@ -932,7 +936,6 @@ strategy_menu()
         ensure_dirs
 
         local list
-        local count
         local i
         local f
         local selected
@@ -1025,8 +1028,6 @@ update_blobs()
 
     ensure_dirs
 
-    info "Синхронизация blobs из нашего репозитория..."
-
     local api
     local urls
     local url
@@ -1035,11 +1036,15 @@ update_blobs()
     api="https://api.github.com/repos/Hactpoenue/nfqws2-openwrt-menu/contents/strategies/blobs"
 
     if have_cmd curl; then
-        urls="$(curl -fsSL "$api" 2>/dev/null |
-            sed -n 's/.*"download_url": *"\([^"]*\)".*/\1/p')"
+        urls="$(
+            curl -fsSL "$api" 2>/dev/null |
+            sed -n 's/.*"download_url": *"\([^"]*\)".*/\1/p'
+        )"
     else
-        urls="$(wget -qO- "$api" 2>/dev/null |
-            sed -n 's/.*"download_url": *"\([^"]*\)".*/\1/p')"
+        urls="$(
+            wget -qO- "$api" 2>/dev/null |
+            sed -n 's/.*"download_url": *"\([^"]*\)".*/\1/p'
+        )"
     fi
 
     for url in $urls; do
@@ -1084,17 +1089,20 @@ update_lists()
     api="https://api.github.com/repos/Hactpoenue/nfqws2-openwrt-menu/contents/strategies/lists"
 
     if have_cmd curl; then
-        urls="$(curl -fsSL "$api" 2>/dev/null |
-            sed -n 's/.*"download_url": *"\([^"]*\)".*/\1/p')"
+        urls="$(
+            curl -fsSL "$api" 2>/dev/null |
+            sed -n 's/.*"download_url": *"\([^"]*\)".*/\1/p'
+        )"
     else
-        urls="$(wget -qO- "$api" 2>/dev/null |
-            sed -n 's/.*"download_url": *"\([^"]*\)".*/\1/p')"
+        urls="$(
+            wget -qO- "$api" 2>/dev/null |
+            sed -n 's/.*"download_url": *"\([^"]*\)".*/\1/p'
+        )"
     fi
 
     for url in $urls; do
         name="$(basename "$url")"
 
-        # auto.list заполняется самим nfqws2.
         [ "$name" = "auto.list" ] && continue
 
         info "Скачивание $name..."
@@ -1222,6 +1230,18 @@ diagnostics()
     fi
 
     echo
+    echo "Стратегии:"
+    echo "  $LOCAL_STRATEGIES"
+
+    echo
+    echo "Blobs:"
+    echo "  $LOCAL_BLOBS"
+
+    echo
+    echo "Lists:"
+    echo "  $LOCAL_LISTS"
+
+    echo
     echo "Current strategy:"
     echo "  $(get_current_strategy)"
 
@@ -1322,15 +1342,12 @@ update_menu()
 }
 
 # -----------------------------------------------------------------------------
-# Установка локальных стратегий после установки меню
+# Первичная синхронизация
 # -----------------------------------------------------------------------------
 
 initial_sync()
 {
     ensure_dirs
-
-    # Не делаем сетевой запрос при каждом запуске.
-    # Если стратегий ещё нет — загружаем их автоматически.
 
     if ! find "$LOCAL_STRATEGIES" \
         -maxdepth 1 \
@@ -1400,53 +1417,19 @@ main_menu()
         read -r choice
 
         case "$choice" in
-            1)
-                install_nfqws2
-                ;;
+            1) install_nfqws2 ;;
+            2) remove_nfqws2 ;;
+            3) update_nfqws2 ;;
+            4) start_nfqws2 ;;
+            5) stop_nfqws2 ;;
+            6) restart_nfqws2 ;;
+            7) status_nfqws2 ;;
 
-            2)
-                remove_nfqws2
-                ;;
-
-            3)
-                update_nfqws2
-                ;;
-
-            4)
-                start_nfqws2
-                ;;
-
-            5)
-                stop_nfqws2
-                ;;
-
-            6)
-                restart_nfqws2
-                ;;
-
-            7)
-                status_nfqws2
-                ;;
-
-            10)
-                strategy_menu
-                ;;
-
-            11)
-                sync_strategies
-                ;;
-
-            12)
-                update_blobs
-                ;;
-
-            13)
-                update_lists
-                ;;
-
-            14)
-                update_ipset
-                ;;
+            10) strategy_menu ;;
+            11) sync_strategies ;;
+            12) update_blobs ;;
+            13) update_lists ;;
+            14) update_ipset ;;
 
             20)
                 if [ -x "/usr/lib/nfqws2-openwrt-menu/menu-dns.sh" ]; then
@@ -1458,17 +1441,9 @@ main_menu()
                 fi
                 ;;
 
-            30)
-                diagnostics
-                ;;
-
-            31)
-                show_logs
-                ;;
-
-            32)
-                update_menu
-                ;;
+            30) diagnostics ;;
+            31) show_logs ;;
+            32) update_menu ;;
 
             0)
                 clear 2>/dev/null || true
