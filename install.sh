@@ -5,12 +5,10 @@ set -e
 REPO="https://raw.githubusercontent.com/Hactpoenue/nfqws2-openwrt-menu/main"
 
 INSTALL_DIR="/usr/lib/nfqws2-openwrt-menu"
+BIN="/usr/bin/nfqws-menu"
 
 MENU_URL="$REPO/nfqws-menu.sh"
 DNS_URL="$REPO/menu-dns.sh"
-
-MENU_BIN="/usr/bin/nfqws-menu"
-DNS_SCRIPT="$INSTALL_DIR/menu-dns.sh"
 
 echo
 echo "=============================================="
@@ -44,10 +42,8 @@ elif command -v wget >/dev/null 2>&1; then
     DOWNLOAD="wget"
 else
     echo "Устанавливаем wget-ssl..."
-
     apk update
     apk add wget-ssl
-
     DOWNLOAD="wget"
 fi
 
@@ -78,16 +74,10 @@ rm -rf "$TMP"
 mkdir -p "$TMP"
 
 echo "  → nfqws-menu.sh"
-
-download \
-    "$MENU_URL" \
-    "$TMP/nfqws-menu.sh"
+download "$MENU_URL" "$TMP/nfqws-menu.sh"
 
 echo "  → menu-dns.sh"
-
-download \
-    "$DNS_URL" \
-    "$TMP/menu-dns.sh"
+download "$DNS_URL" "$TMP/menu-dns.sh"
 
 if [ ! -s "$TMP/nfqws-menu.sh" ]; then
     echo
@@ -111,11 +101,11 @@ echo "[4/4] Установка файлов..."
 chmod 0755 "$TMP/nfqws-menu.sh"
 chmod 0755 "$TMP/menu-dns.sh"
 
-cp -f "$TMP/nfqws-menu.sh" "$MENU_BIN"
-cp -f "$TMP/menu-dns.sh" "$DNS_SCRIPT"
+cp -f "$TMP/nfqws-menu.sh" "$BIN"
+cp -f "$TMP/menu-dns.sh" "$INSTALL_DIR/menu-dns.sh"
 
-chmod 0755 "$MENU_BIN"
-chmod 0755 "$DNS_SCRIPT"
+chmod 0755 "$BIN"
+chmod 0755 "$INSTALL_DIR/menu-dns.sh"
 
 rm -rf "$TMP"
 
@@ -124,17 +114,13 @@ echo "=============================================="
 echo "          УСТАНОВКА ЗАВЕРШЕНА"
 echo "=============================================="
 echo
-
 echo "Установлено:"
 echo
-echo "  $MENU_BIN"
-echo "  $DNS_SCRIPT"
+echo "  $BIN"
+echo "  $INSTALL_DIR/menu-dns.sh"
 echo
-
 echo "Запуск:"
 echo
 echo "  nfqws-menu"
 echo
-
 echo "=============================================="
-echo
