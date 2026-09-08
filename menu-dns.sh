@@ -1,13 +1,48 @@
 #!/bin/sh
 
-set -u
+# =============================================================================
+# NFQWS2 OpenWrt Menu
+# DNS manager: DoH / DoT
+#
+# Использует официальный пакет OpenWrt dnsproxy.
+# dnsproxy поддерживает DoH, DoT, DoQ и DNSCrypt.
+# =============================================================================
 
-HDP_CONFIG="/etc/config/https-dns-proxy"
-STUBBY_CONFIG="/etc/config/stubby"
+DNSPKG="dnsproxy"
+DNSCFG="/etc/config/dnsproxy"
+DHCP_CFG="/etc/config/dhcp"
 
-DNS_BACKUP="/etc/nfqws2/backup/dns"
+DNS_LIST="/etc/nfqws2/dns-upstreams.conf"
 
-mkdir -p "$DNS_BACKUP"
+DNSPROXY_ADDR="127.0.0.1"
+DNSPROXY_PORT="5353"
+
+GREEN="$(printf '\033[32m')"
+RED="$(printf '\033[31m')"
+YELLOW="$(printf '\033[33m')"
+CYAN="$(printf '\033[36m')"
+BOLD="$(printf '\033[1m')"
+RESET="$(printf '\033[0m')"
+
+msg()
+{
+    printf "%s\n" "$1"
+}
+
+ok()
+{
+    printf "%s[ OK ]%s %s\n" "$GREEN" "$RESET" "$1"
+}
+
+warn()
+{
+    printf "%s[WARN]%s %s\n" "$YELLOW" "$RESET" "$1"
+}
+
+error()
+{
+    printf "%s[ERROR]%s %s\n" "$RED" "$RESET" "$1"
+}
 
 pause()
 {
@@ -16,244 +51,522 @@ pause()
     read -r _
 }
 
-install_doh()
+header()
 {
+    clear 2>/dev/null || true
+
     echo
+    printf "%s╔══════════════════════════════════════════════════╗%s\n" \
+        "$CYAN" "$RESET"
+
+    printf "%s║%s                 DNS MANAGER                   %s║%s\n" \
+        "$CYAN" "$BOLD" "$CYAN" "$RESET"
+
+    printf "%s║%s                    DoH / DoT                  %s║%s\n" \
+        "$CYAN" "$BOLD" "$CYAN" "$RESET"
+
+    printf "%s╚══════════════════════════════════════════════════╝%s\n" \
+        "$CYAN" "$RESET"
+
+    echo
+}
+
+is_installed()
+{
+    apk info -e "$DNSPKG" >/dev/null 2>&1
+}
+
+install_dnsproxy()
+{
+    header
+
     echo "=============================================="
-    echo " Установка DoH"
+    echo " Установка DNS Proxy"
     echo "=============================================="
     echo
 
-    echo "Устанавливаем https-dns-proxy..."
+    if is_installed; then
+        warn "dnsproxy уже установлен."
+        pause
+        return
+    fi
 
-    apk update
-    apk add https-dns-proxy
-
+    echo "Устанавливаем официальный пакет OpenWrt:"
     echo
-    echo "Пакет установлен."
+    echo "  dnsproxy"
+    echo
+
+    apk update || {
+        error "apk update завершился ошибкой."
+        pause
+        return
+    }
+
+    apk add "$DNSPKG" || {
+        error "Не удалось установить dnsproxy."
+        pause
+        return
+    }
+
+    ok "dnsproxy установлен."
+
+    setup_default_config
 
     pause
 }
 
-install_dot()
+remove_dnsproxy()
 {
-    echo
+    header
+
     echo "=============================================="
-    echo " Установка DoT"
+    echo " Удаление DNS Proxy"
     echo "=============================================="
     echo
 
-    echo "Устанавливаем stubby..."
+    if ! is_installed; then
+        warn "dnsproxy не установлен."
+        pause
+        return
+    fi
 
-    apk update
-    apk add stubby
-
-    echo
-    echo "Пакет установлен."
-
-    pause
-}
-
-remove_doh()
-{
-    echo
-    printf "Удалить https-dns-proxy? [y/N]: "
+    printf "Удалить dnsproxy? [y/N]: "
     read -r answer
 
     case "$answer" in
         y|Y|д|Д)
-            service https-dns-proxy stop 2>/dev/null || true
-            apk del https-dns-proxy
-            ;;
-    esac
-
-    pause
-}
-
-remove_dot()
-{
-    echo
-    printf "Удалить stubby? [y/N]: "
-    read -r answer
-
-    case "$answer" in
-        y|Y|д|Д)
-            service stubby stop 2>/dev/null || true
-            apk del stubby
-            ;;
-    esac
-
-    pause
-}
-
-doh_config()
-{
-    echo
-    echo "=============================================="
-    echo " DoH"
-    echo "=============================================="
-    echo
-    echo "1) Cloudflare"
-    echo "2) Google"
-    echo "3) Quad9"
-    echo "4) AdGuard"
-    echo "5) Ввести URL"
-    echo "0) Назад"
-    echo
-
-    printf "Выбор: "
-    read -r choice
-
-    case "$choice" in
-        1)
-            URL="https://cloudflare-dns.com/dns-query"
-            ;;
-        2)
-            URL="https://dns.google/dns-query"
-            ;;
-        3)
-            URL="https://dns.quad9.net/dns-query"
-            ;;
-        4)
-            URL="https://dns.adguard-dns.com/dns-query"
-            ;;
-        5)
-            printf "DoH URL: "
-            read -r URL
-            ;;
-        0)
-            return
             ;;
         *)
             return
             ;;
     esac
 
-    if ! apk info -e https-dns-proxy >/dev/null 2>&1; then
-        apk update
-        apk add https-dns-proxy
-    fi
+    /etc/init.d/dnsproxy stop >/dev/null 2>&1 || true
+    /etc/init.d/dnsproxy disable >/dev/null 2>&1 || true
 
-    mkdir -p /etc/config
+    apk del "$DNSPKG"
 
-    cat > "$HDP_CONFIG" <<EOF
-config main 'config'
-        option force_dns '1'
-        option listen_addr '127.0.0.1'
-        option listen_port '5053'
-
-config https-dns-proxy 'main'
-        option resolver_url '$URL'
-        option listen_addr '127.0.0.1'
-        option listen_port '5053'
-EOF
-
-    /etc/init.d/https-dns-proxy enable
-    /etc/init.d/https-dns-proxy restart
-
-    echo
-    echo "DoH включён:"
-    echo "$URL"
+    ok "dnsproxy удалён."
 
     pause
 }
 
-dot_config()
+setup_default_config()
+{
+    mkdir -p /etc/nfqws2
+
+    cat > "$DNSCFG" <<'EOF'
+config global 'global'
+    option enabled '1'
+    option listen_addr '127.0.0.1'
+    option listen_port '5353'
+    option cache '1'
+    option cache_size '4194304'
+    option upstream_mode 'parallel'
+    option dnssec '1'
+    option timeout '5s'
+
+config upstreams 'upstreams'
+    list upstream 'https://cloudflare-dns.com/dns-query'
+    list upstream 'https://dns.google/dns-query'
+    list upstream 'tls://1dot1dot1dot1.cloudflare-dns.com'
+    list upstream 'tls://dns.google'
+EOF
+
+    uci -q delete dhcp.@dnsmasq[0].noresolv
+    uci -q set dhcp.@dnsmasq[0].noresolv='1'
+
+    uci -q delete dhcp.@dnsmasq[0].server
+
+    uci add_list dhcp.@dnsmasq[0].server="127.0.0.1#5353"
+
+    uci commit dhcp
+
+    cat > "$DNS_LIST" <<'EOF'
+# DoH
+https://cloudflare-dns.com/dns-query
+https://dns.google/dns-query
+
+# DoT
+tls://1dot1dot1dot1.cloudflare-dns.com
+tls://dns.google
+EOF
+
+    /etc/init.d/dnsproxy enable >/dev/null 2>&1 || true
+    /etc/init.d/dnsproxy restart >/dev/null 2>&1 || true
+
+    /etc/init.d/dnsmasq restart >/dev/null 2>&1 || true
+
+    ok "Базовая DNS-конфигурация создана."
+}
+
+configure_dnsproxy()
+{
+    local mode="$1"
+
+    mkdir -p /etc/nfqws2
+
+    cat > "$DNSCFG" <<EOF
+config global 'global'
+    option enabled '1'
+    option listen_addr '127.0.0.1'
+    option listen_port '$DNSPROXY_PORT'
+    option cache '1'
+    option cache_size '4194304'
+    option upstream_mode '$mode'
+    option dnssec '1'
+    option timeout '5s'
+
+config upstreams 'upstreams'
+EOF
+
+    while IFS= read -r upstream; do
+        case "$upstream" in
+            ""|\#*)
+                continue
+                ;;
+        esac
+
+        printf "    list upstream '%s'\n" "$upstream" >> "$DNSCFG"
+    done < "$DNS_LIST"
+
+    uci -q delete dhcp.@dnsmasq[0].noresolv
+    uci -q set dhcp.@dnsmasq[0].noresolv='1'
+
+    uci -q delete dhcp.@dnsmasq[0].server
+    uci add_list dhcp.@dnsmasq[0].server="127.0.0.1#$DNSPROXY_PORT"
+
+    uci commit dhcp
+
+    /etc/init.d/dnsproxy enable >/dev/null 2>&1 || true
+    /etc/init.d/dnsproxy restart
+
+    /etc/init.d/dnsmasq restart
+
+    ok "DNS настроен."
+}
+
+show_upstreams()
 {
     echo
-    echo "=============================================="
-    echo " DoT"
-    echo "=============================================="
-    echo
-    echo "1) Cloudflare"
-    echo "2) Quad9"
-    echo "3) AdGuard"
-    echo "0) Назад"
+    echo "Текущие upstream DNS:"
     echo
 
-    printf "Выбор: "
-    read -r choice
+    if [ -f "$DNS_LIST" ]; then
+        grep -vE '^[[:space:]]*(#|$)' "$DNS_LIST" |
+            nl -ba
+    else
+        echo "Список отсутствует."
+    fi
 
-    case "$choice" in
-        1)
-            IP="1.1.1.1"
-            SNI="cloudflare-dns.com"
-            ;;
-        2)
-            IP="9.9.9.9"
-            SNI="dns.quad9.net"
-            ;;
-        3)
-            IP="94.140.14.14"
-            SNI="dns.adguard-dns.com"
-            ;;
-        0)
-            return
+    echo
+}
+
+add_upstream()
+{
+    header
+
+    echo "=============================================="
+    echo " Добавить DNS"
+    echo "=============================================="
+    echo
+
+    echo "Примеры:"
+    echo
+    echo "DoH:"
+    echo "  https://cloudflare-dns.com/dns-query"
+    echo "  https://dns.google/dns-query"
+    echo
+    echo "DoT:"
+    echo "  tls://1dot1dot1dot1.cloudflare-dns.com"
+    echo "  tls://dns.google"
+    echo
+
+    printf "Введите upstream: "
+    read -r upstream
+
+    [ -z "$upstream" ] && return
+
+    case "$upstream" in
+        https://*|tls://*)
             ;;
         *)
+            error "Разрешены только https:// и tls://"
+            pause
             return
             ;;
     esac
 
-    if ! apk info -e stubby >/dev/null 2>&1; then
-        apk update
-        apk add stubby
+    if grep -Fxq "$upstream" "$DNS_LIST" 2>/dev/null; then
+        warn "Такой upstream уже есть."
+        pause
+        return
     fi
 
-    mkdir -p /etc/config
+    printf '%s\n' "$upstream" >> "$DNS_LIST"
 
-    cat > "$STUBBY_CONFIG" <<EOF
-config stubby 'global'
-        option manual '0'
-        option tls_authentication '1'
-        option round_robin_upstreams '1'
-        list listen_address '127.0.0.1@5453'
-
-config resolver
-        option address '$IP'
-        option tls_auth_name '$SNI'
-        option tls_port '853'
-EOF
-
-    /etc/init.d/stubby enable
-    /etc/init.d/stubby restart
-
-    echo
-    echo "DoT включён:"
-    echo "$IP"
-    echo "SNI: $SNI"
+    ok "Upstream добавлен."
 
     pause
 }
 
-dns_status()
+remove_upstream()
 {
-    echo
+    header
+
     echo "=============================================="
-    echo " DNS STATUS"
+    echo " Удалить DNS"
     echo "=============================================="
     echo
 
-    echo "https-dns-proxy:"
-    if apk info -e https-dns-proxy >/dev/null 2>&1; then
-        service https-dns-proxy status 2>/dev/null || true
+    if [ ! -f "$DNS_LIST" ]; then
+        warn "Список пуст."
+        pause
+        return
+    fi
+
+    grep -vE '^[[:space:]]*(#|$)' "$DNS_LIST" |
+        nl -ba
+
+    echo
+    printf "Номер для удаления: "
+    read -r num
+
+    [ -z "$num" ] && return
+
+    tmp="/tmp/dns-upstreams.$$.tmp"
+
+    awk -v n="$num" '
+    /^[[:space:]]*#/ || /^[[:space:]]*$/ {
+        print
+        next
+    }
+    {
+        count++
+        if (count != n)
+            print
+    }
+    ' "$DNS_LIST" > "$tmp"
+
+    mv "$tmp" "$DNS_LIST"
+
+    ok "Upstream удалён."
+
+    pause
+}
+
+select_mode()
+{
+    header
+
+    echo "=============================================="
+    echo " Режим работы upstream"
+    echo "=============================================="
+    echo
+
+    echo "1) parallel"
+    echo "   Запрос отправляется нескольким DNS."
+    echo
+    echo "2) load_balance"
+    echo "   Балансировка между DNS."
+    echo
+    echo "3) fastest_addr"
+    echo "   Использование самого быстрого ответа."
+    echo
+
+    printf "Выбор [1-3]: "
+    read -r choice
+
+    case "$choice" in
+        1)
+            configure_dnsproxy "parallel"
+            ;;
+        2)
+            configure_dnsproxy "load_balance"
+            ;;
+        3)
+            configure_dnsproxy "fastest_addr"
+            ;;
+        *)
+            warn "Неверный выбор."
+            ;;
+    esac
+
+    pause
+}
+
+force_dns()
+{
+    header
+
+    echo "=============================================="
+    echo " Принудительный DNS для клиентов"
+    echo "=============================================="
+    echo
+
+    echo "Будет включён принудительный DNS:"
+    echo
+    echo "LAN → router:53"
+    echo "LAN → внешний DNS:53  → router"
+    echo "LAN → внешний DNS:853 → router"
+    echo
+
+    printf "Включить? [Y/n]: "
+    read -r answer
+
+    case "$answer" in
+        n|N|н|Н)
+            return
+            ;;
+    esac
+
+    # UCI firewall4 redirect.
+    #
+    # Все DNS-запросы клиентов по UDP/TCP 53
+    # перенаправляются на dnsmasq роутера.
+    #
+
+    uci -q delete firewall.nfqws2_dns_redirect
+    uci set firewall.nfqws2_dns_redirect='redirect'
+    uci set firewall.nfqws2_dns_redirect.name='NFQWS2 Force DNS'
+    uci set firewall.nfqws2_dns_redirect.src='lan'
+    uci set firewall.nfqws2_dns_redirect.src_dport='53'
+    uci set firewall.nfqws2_dns_redirect.proto='tcp udp'
+    uci set firewall.nfqws2_dns_redirect.family='any'
+    uci set firewall.nfqws2_dns_redirect.target='DNAT'
+    uci set firewall.nfqws2_dns_redirect.dest_port='53'
+    uci set firewall.nfqws2_dns_redirect.reflection='0'
+
+    # DoT невозможно DNAT-ить на обычный DNS без
+    # дополнительного TLS-сервера. Поэтому 853 блокируем.
+    #
+    # Клиенты должны использовать DNS роутера.
+
+    uci -q delete firewall.nfqws2_dot_block
+    uci set firewall.nfqws2_dot_block='rule'
+    uci set firewall.nfqws2_dot_block.name='NFQWS2 Block external DoT'
+    uci set firewall.nfqws2_dot_block.src='lan'
+    uci set firewall.nfqws2_dot_block.dest='wan'
+    uci set firewall.nfqws2_dot_block.dest_port='853'
+    uci set firewall.nfqws2_dot_block.proto='tcp udp'
+    uci set firewall.nfqws2_dot_block.target='REJECT'
+
+    uci commit firewall
+
+    /etc/init.d/firewall reload
+
+    ok "Принудительный DNS включён."
+
+    pause
+}
+
+disable_force_dns()
+{
+    header
+
+    echo "=============================================="
+    echo " Отключение принудительного DNS"
+    echo "=============================================="
+    echo
+
+    uci -q delete firewall.nfqws2_dns_redirect
+    uci -q delete firewall.nfqws2_dot_block
+
+    uci commit firewall
+
+    /etc/init.d/firewall reload
+
+    ok "Принудительный DNS отключён."
+
+    pause
+}
+
+show_status()
+{
+    header
+
+    echo "=============================================="
+    echo " DNS статус"
+    echo "=============================================="
+    echo
+
+    if is_installed; then
+        echo "dnsproxy: установлен"
     else
-        echo "не установлен"
+        echo "dnsproxy: НЕ установлен"
+        pause
+        return
     fi
 
     echo
-    echo "stubby:"
-    if apk info -e stubby >/dev/null 2>&1; then
-        service stubby status 2>/dev/null || true
+    echo "dnsproxy:"
+    /etc/init.d/dnsproxy status 2>/dev/null || true
+
+    echo
+    echo "dnsmasq:"
+    /etc/init.d/dnsmasq status 2>/dev/null || true
+
+    echo
+    echo "DNS listener:"
+    netstat -ln 2>/dev/null |
+        grep ":$DNSPROXY_PORT " ||
+        ss -ln 2>/dev/null |
+        grep ":$DNSPROXY_PORT " ||
+        echo "listener не найден"
+
+    echo
+    echo "Upstreams:"
+    show_upstreams
+
+    echo "dnsmasq upstream:"
+    uci show dhcp 2>/dev/null |
+        grep -E 'noresolv|server' |
+        head -20
+
+    echo
+    echo "Firewall DNS rules:"
+    uci show firewall 2>/dev/null |
+        grep -E 'nfqws2_(dns_redirect|dot_block)' ||
+        echo "не настроены"
+
+    pause
+}
+
+test_dns()
+{
+    header
+
+    echo "=============================================="
+    echo " Проверка DNS"
+    echo "=============================================="
+    echo
+
+    echo "1. Проверяем локальный dnsproxy..."
+    echo
+
+    if command -v nslookup >/dev/null 2>&1; then
+        nslookup example.com 127.0.0.1#$DNSPROXY_PORT
+    elif command -v drill >/dev/null 2>&1; then
+        drill @127.0.0.1 -p "$DNSPROXY_PORT" example.com
     else
-        echo "не установлен"
+        warn "nslookup/drill отсутствует."
     fi
 
     echo
-    echo "DNS listeners:"
-    netstat -lnptu 2>/dev/null |
-        grep -E ':53 |:5053 |:5453 ' ||
-        true
+    echo "2. Проверяем процесс..."
+
+    if pgrep dnsproxy >/dev/null 2>&1; then
+        ok "dnsproxy работает."
+    else
+        error "dnsproxy НЕ работает."
+    fi
+
+    echo
+    echo "3. Последние DNS-сообщения..."
+
+    logread 2>/dev/null |
+        grep -i dnsproxy |
+        tail -20
 
     pause
 }
@@ -261,32 +574,75 @@ dns_status()
 main()
 {
     while true; do
-        clear 2>/dev/null || true
+        header
+
+        if is_installed; then
+            printf "%sdnsproxy:%s %sустановлен%s\n" \
+                "$BOLD" "$RESET" "$GREEN" "$RESET"
+        else
+            printf "%sdnsproxy:%s %sне установлен%s\n" \
+                "$BOLD" "$RESET" "$RED" "$RESET"
+        fi
 
         echo
-        echo "╔══════════════════════════════════════════════╗"
-        echo "║                 DNS MENU                     ║"
-        echo "╚══════════════════════════════════════════════╝"
+
+        show_upstreams
+
         echo
-        echo " 1) Установить / настроить DoH"
-        echo " 2) Установить / настроить DoT"
-        echo " 3) Удалить DoH"
-        echo " 4) Удалить DoT"
-        echo " 5) DNS статус"
+        echo "1) Установить dnsproxy"
+        echo "2) Удалить dnsproxy"
         echo
-        echo " 0) Назад"
+        echo "3) Добавить DoH / DoT"
+        echo "4) Удалить DoH / DoT"
+        echo "5) Режим upstream"
+        echo
+        echo "6) Включить принудительный DNS"
+        echo "7) Отключить принудительный DNS"
+        echo
+        echo "8) Статус"
+        echo "9) Проверить DNS"
+        echo
+        echo "0) Назад"
         echo
 
         printf "Выбор: "
         read -r choice
 
         case "$choice" in
-            1) doh_config ;;
-            2) dot_config ;;
-            3) remove_doh ;;
-            4) remove_dot ;;
-            5) dns_status ;;
-            0) return ;;
+            1)
+                install_dnsproxy
+                ;;
+            2)
+                remove_dnsproxy
+                ;;
+            3)
+                add_upstream
+                ;;
+            4)
+                remove_upstream
+                ;;
+            5)
+                select_mode
+                ;;
+            6)
+                force_dns
+                ;;
+            7)
+                disable_force_dns
+                ;;
+            8)
+                show_status
+                ;;
+            9)
+                test_dns
+                ;;
+            0|"")
+                exit 0
+                ;;
+            *)
+                warn "Неверный выбор."
+                sleep 1
+                ;;
         esac
     done
 }
